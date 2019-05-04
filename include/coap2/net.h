@@ -217,6 +217,13 @@ typedef struct coap_context_t {
   unsigned int csm_timeout;           /**< Timeout for waiting for a CSM from the remote side. 0 means disabled. */
 
   void *app;                       /**< application-specific data */
+#ifdef HAVE_SYS_EPOLL_H
+  int epfd;                        /**< External FD for epoll */
+#ifdef HAVE_SYS_TIMERFD_H
+  int eptimerfd;                   /**< Internal FD for timeout */
+  coap_tick_t next_timeout;        /**< When the next timeout is to occur */
+#endif /* HAVE_SYS_TIMERFD_H */
+#endif /* HAVE_SYS_EPOLL_H */
 } coap_context_t;
 
 /**
@@ -365,6 +372,16 @@ coap_context_set_pki_root_cas(coap_context_t *context,
  * @return 1 if successful, else 0
  */
 void coap_context_set_keepalive(coap_context_t *context, unsigned int seconds);
+
+/**
+ * Get the libcoap internal file descriptor for using in an application's
+ * select() or returned as an event in an application's epoll_wait() call.
+ *
+ * @param context        The coap_context_t object.
+ *
+ * @return The libcoap file descriptor or @c -1 if epoll is not available.
+ */
+int coap_context_get_coap_fd(coap_context_t *context);
 
 /**
  * Returns a new message id and updates @p session->tx_mid accordingly. The
@@ -560,12 +577,30 @@ void coap_read(coap_context_t *ctx, coap_tick_t now);
  * The main message processing loop.
  *
  * @param ctx The CoAP context
- * @param timeout_ms Minimum number of milliseconds to wait for new messages before returning. If zero the call will block until at least one packet is sent or received.
+ * @param timeout_ms Minimum number of milliseconds to wait for new messages
+ *                   before returning. If zero the call will block until at
+ *                   least one packet is sent or received. If one, the function
+ *                   will return immediately following without waiting for any
+ *                   new input not already available.
  *
- * @return number of milliseconds spent or @c -1 if there was an error
+ * @return Number of milliseconds spent in coap_run_once, or @c -1 if there
+ *         was an error
  */
 
 int coap_run_once( coap_context_t *ctx, unsigned int timeout_ms );
+
+struct epoll_event;
+/**
+ * Process all the epoll events
+ *
+ * Internal function
+ *
+ * @param events The list of events returned from an apoll_wait() call.
+ * @param nevents The number of events.
+ *
+ * @return 1 if timeout event, else 0
+ */
+int coap_io_do_events(coap_context_t *ctx, struct epoll_event* events, int nevents);
 
 /**
  * Parses and interprets a CoAP datagram with context @p ctx. This function

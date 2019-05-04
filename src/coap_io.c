@@ -40,6 +40,11 @@
 # include <unistd.h>
 #endif
 #include <errno.h>
+#if defined(HAVE_SYS_EPOLL_H) && defined(HAVE_SYS_TIMERFD_H)
+#include <sys/epoll.h>
+#include <sys/timerfd.h>
+#define HAVE_EPOLL_SUPPORT
+#endif /* HAVE_SYS_EPOLL_H && HAVE_SYS_TIMERFD_H */
 
 #ifdef WITH_CONTIKI
 # include "uip.h"
@@ -625,11 +630,61 @@ error:
 
 void coap_socket_close(coap_socket_t *sock) {
   if (sock->fd != COAP_INVALID_SOCKET) {
+#ifdef HAVE_EPOLL_SUPPORT
+    coap_context_t *context = sock->session ? sock->session->context :
+                              sock->endpoint ? sock->endpoint->context : NULL;
+    if (context != NULL) {
+      int ret;
+      struct epoll_event event;
+
+      /* Kernels prior to 2.6.9 expect non NULL event parameter */
+      ret = epoll_ctl(context->epfd, EPOLL_CTL_DEL, sock->fd, &event);
+      if (ret == -1) {
+         coap_log(LOG_ERR,
+                  "%s: epoll_ctl DEL failed: %s (%d)\n",
+                  "coap_socket_close",
+                  coap_socket_strerror(), errno);
+      }
+    }
+#endif /* HAVE_EPOLL_SUPPORT */
+    sock->endpoint = NULL;
+    sock->session = NULL;
     coap_closesocket(sock->fd);
     sock->fd = COAP_INVALID_SOCKET;
   }
   sock->flags = COAP_SOCKET_EMPTY;
 }
+
+#ifdef HAVE_EPOLL_SUPPORT
+void
+coap_epoll_ctl_mod(coap_socket_t *sock,
+                   uint32_t events,
+                   const char *func
+) {
+  int ret;
+  struct epoll_event event;
+  coap_context_t *context;
+
+  if (sock == NULL)
+    return;
+
+  context = sock->session ? sock->session->context :
+                            sock->endpoint ? sock->endpoint->context : NULL;
+  if (context == NULL)
+    return;
+
+  event.events = events;
+  event.data.ptr = sock;
+
+  ret = epoll_ctl(context->epfd, EPOLL_CTL_MOD, sock->fd, &event);
+  if (ret == -1) {
+     coap_log(LOG_ERR,
+              "%s: epoll_ctl MOD failed: %s (%d)\n",
+              func,
+              coap_socket_strerror(), errno);
+  }
+}
+#endif /* HAVE_EPOLL_SUPPORT */
 
 ssize_t
 coap_socket_write(coap_socket_t *sock, const uint8_t *data, size_t data_len) {
@@ -650,14 +705,29 @@ coap_socket_write(coap_socket_t *sock, const uint8_t *data, size_t data_len) {
     if (errno==EAGAIN || errno == EINTR) {
 #endif
       sock->flags |= COAP_SOCKET_WANT_WRITE;
+#ifdef HAVE_EPOLL_SUPPORT
+      coap_epoll_ctl_mod(sock,
+                         EPOLLOUT |
+                          ((sock->flags & COAP_SOCKET_WANT_READ) ?
+                           EPOLLIN : 0),
+                         __FUNCTION__);
+#endif /* HAVE_EPOLL_SUPPORT */
       return 0;
     }
     coap_log(LOG_WARNING, "coap_socket_write: send: %s\n",
              coap_socket_strerror());
     return -1;
   }
-  if (r < (ssize_t)data_len)
+  if (r < (ssize_t)data_len) {
     sock->flags |= COAP_SOCKET_WANT_WRITE;
+#ifdef HAVE_EPOLL_SUPPORT
+      coap_epoll_ctl_mod(sock,
+                         EPOLLOUT |
+                          ((sock->flags & COAP_SOCKET_WANT_READ) ?
+                           EPOLLIN : 0),
+                         __FUNCTION__);
+#endif /* HAVE_EPOLL_SUPPORT */
+  }
   return r;
 }
 
@@ -1126,6 +1196,10 @@ coap_write(coap_context_t *ctx,
   coap_tick_t session_timeout;
   coap_tick_t timeout = 0;
   coap_session_t *tmp;
+#ifdef HAVE_EPOLL_SUPPORT
+  (void)sockets;
+  (void)max_sockets;
+#endif /* HAVE_EPOLL_SUPPORT */
 
   *num_sockets = 0;
 
@@ -1138,10 +1212,12 @@ coap_write(coap_context_t *ctx,
     session_timeout = COAP_DEFAULT_SESSION_TIMEOUT * COAP_TICKS_PER_SECOND;
 
   LL_FOREACH(ctx->endpoint, ep) {
+#ifndef HAVE_EPOLL_SUPPORT
     if (ep->sock.flags & (COAP_SOCKET_WANT_READ | COAP_SOCKET_WANT_WRITE | COAP_SOCKET_WANT_ACCEPT)) {
       if (*num_sockets < max_sockets)
         sockets[(*num_sockets)++] = &ep->sock;
     }
+#endif /* ! HAVE_EPOLL_SUPPORT */
     LL_FOREACH_SAFE(ep->sessions, s, tmp) {
       if (s->type == COAP_SESSION_TYPE_SERVER && s->ref == 0 &&
           s->delayqueue == NULL &&
@@ -1154,10 +1230,12 @@ coap_write(coap_context_t *ctx,
           if (timeout == 0 || s_timeout < timeout)
             timeout = s_timeout;
         }
+#ifndef HAVE_EPOLL_SUPPORT
         if (s->sock.flags & (COAP_SOCKET_WANT_READ | COAP_SOCKET_WANT_WRITE)) {
           if (*num_sockets < max_sockets)
             sockets[(*num_sockets)++] = &s->sock;
         }
+#endif /* ! HAVE_EPOLL_SUPPORT */
       }
     }
   }
@@ -1208,10 +1286,12 @@ coap_write(coap_context_t *ctx,
         timeout = s_timeout;
     }
 
+#ifndef HAVE_EPOLL_SUPPORT
     if (s->sock.flags & (COAP_SOCKET_WANT_READ | COAP_SOCKET_WANT_WRITE | COAP_SOCKET_WANT_CONNECT)) {
       if (*num_sockets < max_sockets)
         sockets[(*num_sockets)++] = &s->sock;
     }
+#endif /* ! HAVE_EPOLL_SUPPORT */
   }
 
   nextpdu = coap_peek_next(ctx);
@@ -1283,20 +1363,30 @@ coap_write(coap_context_t *ctx,
 
 int
 coap_run_once(coap_context_t *ctx, unsigned timeout_ms) {
+# ifndef HAVE_EPOLL_SUPPORT
   fd_set readfds, writefds, exceptfds;
-  coap_fd_t nfds = 0;
-  struct timeval tv;
-  coap_tick_t before, now;
-  int result;
+# endif /* ! HAVE_EPOLL_SUPPORT */
   coap_socket_t *sockets[64];
-  unsigned int num_sockets = 0, i, timeout;
+  coap_fd_t nfds = 0;
+  coap_tick_t before, now;
+  unsigned int num_sockets = 0, timeout;
+#ifndef HAVE_EPOLL_SUPPORT
+  struct timeval tv;
+  int result;
+  unsigned int i;
+#endif /* ! HAVE_EPOLL_SUPPORT */
 
   coap_ticks(&before);
 
   timeout = coap_write(ctx, sockets, (unsigned int)(sizeof(sockets) / sizeof(sockets[0])), &num_sockets, before);
+#ifdef HAVE_EPOLL_SUPPORT
+  /* Save when the next expected I/O is to take place */
+  ctx->next_timeout = timeout ? before + timeout : 0;
+#endif /* HAVE_EPOLL_SUPPORT */
   if (timeout == 0 || timeout_ms < timeout)
     timeout = timeout_ms;
 
+#ifndef HAVE_EPOLL_SUPPORT
   FD_ZERO(&readfds);
   FD_ZERO(&writefds);
   FD_ZERO(&exceptfds);
@@ -1316,6 +1406,8 @@ coap_run_once(coap_context_t *ctx, unsigned timeout_ms) {
   }
 
   if ( timeout > 0 ) {
+    if (timeout == 1)
+      timeout = 0;
     tv.tv_usec = (timeout % 1000) * 1000;
     tv.tv_sec = (long)(timeout / 1000);
   }
@@ -1348,6 +1440,69 @@ coap_run_once(coap_context_t *ctx, unsigned timeout_ms) {
 
   coap_ticks(&now);
   coap_read(ctx, now);
+
+#else /* HAVE_EPOLL_SUPPORT */
+  do {
+    struct epoll_event events[COAP_MAX_EPOLL_EVENTS];
+    int etimeout = timeout;
+
+    /* Potentially adjust based on what the caller wants */
+    if (timeout_ms == 0)
+      etimeout = -1;
+    else if (timeout_ms == 1)
+      etimeout = 0;
+
+    nfds = epoll_wait(ctx->epfd, events, COAP_MAX_EPOLL_EVENTS, etimeout);
+    if (nfds < 0) {
+      if (errno != EINTR) {
+        coap_log (LOG_ERR, "epoll_wait: unexpected error: %s (%d)\n",
+                            coap_socket_strerror(), nfds);
+      }
+      break;
+    }
+
+    if (coap_io_do_events(ctx, events, nfds)) {
+      /* timeout event occurred, need to see what timedout for processing */
+      coap_ticks(&now);
+      coap_write(ctx, sockets,
+                 (unsigned int)(sizeof(sockets) / sizeof(sockets[0])),
+                  &num_sockets, now);
+      /* fake nfds so we go around the loop again */
+      nfds = COAP_MAX_EPOLL_EVENTS;
+    }
+
+    /*
+     * reset to 1 (which causes etimeout to become 0)
+     * incase we have to do another iteration
+     */
+    timeout_ms = 1;
+    /* Keep retrying until less than COAP_MAX_EPOLL_EVENTS are returned */
+  } while (nfds == COAP_MAX_EPOLL_EVENTS);
+
+  if (ctx->eptimerfd != -1) {
+    struct itimerspec new_value;
+    struct itimerspec old_value;
+    int ret;
+
+    memset(&new_value, 0, sizeof(new_value));
+    coap_ticks(&now);
+    if (ctx->next_timeout != 0 && ctx->next_timeout > now) {
+      coap_tick_t rem_timeout = ctx->next_timeout - now;
+      /* Need to trigger an event on ctx->epfd in the future */
+      new_value.it_value.tv_sec = rem_timeout / 1000;
+      new_value.it_value.tv_nsec = (rem_timeout % 1000) * 1000000;
+    }
+    /* reset, or specify a future time for eptimerfd to trigger */
+    ret = timerfd_settime(ctx->eptimerfd, 0, &new_value, &old_value);
+    if (ret == -1) {
+      coap_log(LOG_ERR,
+                "%s: timerfd_settime failed: %s (%d)\n",
+                "coap_run_once",
+                coap_socket_strerror(), errno);
+    }
+  }
+  coap_ticks(&now);
+#endif /* HAVE_EPOLL_SUPPORT */
 
   return (int)(((now - before) * 1000) / COAP_TICKS_PER_SECOND);
 }

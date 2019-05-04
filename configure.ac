@@ -565,7 +565,7 @@ fi
 # Checks for header files.
 AC_CHECK_HEADERS([assert.h arpa/inet.h limits.h netdb.h netinet/in.h \
                   stdlib.h string.h strings.h sys/socket.h sys/time.h \
-                  time.h unistd.h sys/unistd.h syslog.h sys/ioctl.h])
+                  time.h unistd.h sys/unistd.h syslog.h sys/ioctl.h sys/epoll.h sys/timerfd.h])
 
 # Checks for typedefs, structures, and compiler characteristics.
 AC_TYPE_SIZE_T
@@ -655,6 +655,7 @@ man/coap_attribute.txt
 man/coap_context.txt
 man/coap_encryption.txt
 man/coap_handler.txt
+man/coap_io.txt
 man/coap_observe.txt
 man/coap_logging.txt
 man/coap_pdu_setup.txt

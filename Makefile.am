@@ -157,6 +157,8 @@ coap_dtls_send \
 coap_dtls_session_update_mtu \
 coap_dtls_startup \
 coap_endpoint_new_dtls_session \
+coap_epoll_ctl_mod \
+coap_io_do_events \
 coap_mfree_endpoint \
 coap_packet_extract_pbuf \
 coap_pdu_from_pbuf \
