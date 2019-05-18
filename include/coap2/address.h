@@ -163,6 +163,12 @@ coap_address_isany(const coap_address_t *a) {
  * returns @c 1 if @p a is multicast, @c 0 otherwise.
  */
 int coap_is_mcast(const coap_address_t *a);
+
+/**
+ * Checks if given address @p a denotes a broadcast address. This function
+ * returns @c 1 if @p a is multicast, @c 0 otherwise.
+ */
+int coap_is_bcast(const coap_address_t *a);
 #else /* !WITH_LWIP && !WITH_CONTIKI */
 /**
  * Checks if given address @p a denotes a multicast address. This function

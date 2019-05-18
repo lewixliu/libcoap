@@ -70,6 +70,19 @@ int coap_is_mcast(const coap_address_t *a) {
   }
  return 0;
 }
+
+int coap_is_bcast(const coap_address_t *a) {
+  if (!a)
+    return 0;
+
+ switch (a->addr.sa.sa_family) {
+ case AF_INET:
+   return INADDR_BROADCAST == ntohl(a->addr.sin.sin_addr.s_addr);
+ default:  /* fall through and signal error */
+   ;
+  }
+ return 0;
+}
 #else /* !defined(WITH_CONTIKI) && !defined(WITH_LWIP) */
 
 #ifdef __clang__
