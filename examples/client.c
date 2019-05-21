@@ -1069,10 +1069,10 @@ cmdline_input_from_file(char *filename, coap_string_t *buf) {
 static method_t
 cmdline_method(char *arg) {
   static const char *methods[] =
-    { 0, "get", "post", "put", "delete", "fetch", "patch", "ipatch", 0};
+    { "ping", "get", "post", "put", "delete", "fetch", "patch", "ipatch", 0};
   unsigned char i;
 
-  for (i=1; methods[i] && strcasecmp(arg,methods[i]) != 0 ; ++i)
+  for (i=0; methods[i] && strcasecmp(arg,methods[i]) != 0 ; ++i)
     ;
 
   return i;     /* note that we do not prevent illegal methods */
@@ -1465,7 +1465,13 @@ main(int argc, char **argv) {
   if (flags & FLAGS_BLOCK)
     set_blocksize();
 
-  if (! (pdu = coap_new_request(ctx, session, method, &optlist, payload.s, payload.length))) {
+  if (method == 0) {
+    pdu = coap_new_request(ctx, session, 0, NULL, NULL, 0);
+  } else {
+    pdu = coap_new_request(ctx, session, method, &optlist, payload.s, payload.length);
+  }
+
+  if (!pdu ) {
     goto finish;
   }
 
