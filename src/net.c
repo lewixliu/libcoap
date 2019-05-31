@@ -1571,7 +1571,7 @@ coap_handle_dgram(coap_context_t *ctx, coap_session_t *session,
 
   assert(COAP_PROTO_NOT_RELIABLE(session->proto));
 
-  pdu = coap_pdu_init(0, 0, 0, msg_len - 4);
+  pdu = coap_pdu_init(0, 0, 0, msg_len - 4 + 1);
   if (!pdu)
     goto error;
 

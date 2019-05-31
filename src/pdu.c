@@ -568,10 +568,11 @@ coap_pdu_parse(coap_proto_t proto,
     return 0;
   if (hdr_size > pdu->max_hdr_size)
     return 0;
-  if (!coap_pdu_resize(pdu, length - hdr_size))
+  if (!coap_pdu_resize(pdu, length - hdr_size + 1))
     return 0;
 #ifndef WITH_LWIP
   memcpy(pdu->token - hdr_size, data, length);
+  *(pdu->token - hdr_size + length) = 0;
 #endif
   pdu->hdr_size = (uint8_t)hdr_size;
   pdu->used_size = length - hdr_size;
